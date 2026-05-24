@@ -1,0 +1,10 @@
+skills/
+download/
+examples/
+.zscripts/
+mini-services/
+db/
+*.db
+*.log
+.env
+worklog.md

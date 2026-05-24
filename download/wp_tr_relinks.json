@@ -1,0 +1,23 @@
+{
+  "code": 200,
+  "data": {
+    "description": "",
+    "external": {},
+    "html": "<html><head><meta name=\"color-scheme\" content=\"light dark\"><meta charset=\"utf-8\"></head><body><pre>{\"code\":\"rest_forbidden\",\"message\":\"Sorry, you are not allowed to do that.\",\"data\":{\"status\":401}}</pre><div class=\"json-formatter-container\"></div></body></html>",
+    "metadata": {
+      "color-scheme": "light dark"
+    },
+    "title": "",
+    "url": "https://desicinemas.pk/wp-json/tr-relinks/v1/items",
+    "usage": {
+      "tokens": 69
+    },
+    "warning": "Target URL returned error 401: Unauthorized"
+  },
+  "meta": {
+    "usage": {
+      "tokens": 69
+    }
+  },
+  "status": 20000
+}

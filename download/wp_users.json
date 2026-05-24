@@ -1,0 +1,18 @@
+{
+  "code": 200,
+  "data": {
+    "description": "",
+    "html": "<html><head><meta name=\"color-scheme\" content=\"light dark\"></head><body><pre style=\"word-wrap: break-word; white-space: pre-wrap;\">[{\"id\":1,\"name\":\"Desi Cinemas\",\"url\":\"https:\\/\\/desicinemas.pk\",\"description\":\"\",\"link\":\"https:\\/\\/desicinemas.pk\\/author\\/desicinema\\/\",\"slug\":\"desicinema\",\"avatar_urls\":{\"24\":\"https:\\/\\/desicinemas.pk\\/wp-content\\/litespeed\\/avatar\\/2a7040d15315764419f61f22dabd0f3c.jpg?ver=1779129558\",\"48\":\"https:\\/\\/desicinemas.pk\\/wp-content\\/litespeed\\/avatar\\/15d87c45349abb5b4d60810970869adb.jpg?ver=1779129558\",\"96\":\"https:\\/\\/desicinemas.pk\\/wp-content\\/litespeed\\/avatar\\/bf723a3f9587a56aa7d0ae8bf2487875.jpg?ver=1779129558\"},\"meta\":[],\"yoast_head\":null,\"yoast_head_json\":null,\"_links\":{\"self\":[{\"href\":\"https:\\/\\/desicinemas.pk\\/wp-json\\/wp\\/v2\\/users\\/1\",\"targetHints\":{\"allow\":[\"GET\"]}}],\"collection\":[{\"href\":\"https:\\/\\/desicinemas.pk\\/wp-json\\/wp\\/v2\\/users\"}]}}]</pre></body></html>",
+    "title": "",
+    "url": "https://desicinemas.pk/wp-json/wp/v2/users",
+    "usage": {
+      "tokens": 307
+    }
+  },
+  "meta": {
+    "usage": {
+      "tokens": 307
+    }
+  },
+  "status": 20000
+}

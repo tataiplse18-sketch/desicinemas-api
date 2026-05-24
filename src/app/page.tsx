@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import Hls from 'hls.js';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,7 +13,8 @@ import {
   Play, Search, Film, Star, Clock, Calendar, 
   AlertTriangle, Shield, Eye, Globe, X,
   RefreshCw, Loader2, ChevronRight, Monitor,
-  Maximize2, Minimize2
+  Maximize2, Minimize2, Volume2, VolumeX,
+  Pause, SkipForward, AlertCircle
 } from 'lucide-react';
 
 interface Movie {
@@ -54,6 +56,17 @@ interface MovieDetail {
   dislikes: number;
 }
 
+interface StreamData {
+  success: boolean;
+  streamUrl: string;
+  source: string;
+  poster: string;
+  tracks: any[];
+  title: string;
+  videoId: string;
+  error?: string;
+}
+
 export default function DemoPage() {
   const [movies, setMovies] = useState<Movie[]>([]);
   const [page, setPage] = useState(1);
@@ -63,14 +76,31 @@ export default function DemoPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [showDetail, setShowDetail] = useState(false);
   const [activeTab, setActiveTab] = useState<'security' | 'demo'>('demo');
-  const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
+  const [lastUpdated, setLastUpdated] = useState<string>('');
   const [autoRefresh, setAutoRefresh] = useState(false);
 
   // Video player state
-  const [activeStreamUrl, setActiveStreamUrl] = useState('');
+  const [streamData, setStreamData] = useState<StreamData | null>(null);
   const [activeEmbedKey, setActiveEmbedKey] = useState('');
   const [playerLoading, setPlayerLoading] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [playerError, setPlayerError] = useState('');
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const hlsRef = useRef<Hls | null>(null);
+  const playerContainerRef = useRef<HTMLDivElement>(null);
+
+  // Cleanup HLS on unmount
+  useEffect(() => {
+    return () => {
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+    };
+  }, []);
 
   // Fetch movies from our API
   const fetchMovies = useCallback(async (pageNum: number = 1) => {
@@ -84,7 +114,7 @@ export default function DemoPage() {
         } else {
           setMovies(prev => [...prev, ...data.movies]);
         }
-        setLastUpdated(new Date());
+        setLastUpdated(new Date().toLocaleTimeString());
       }
     } catch {
       if (pageNum === 1) {
@@ -125,8 +155,9 @@ export default function DemoPage() {
   const loadMovieDetail = async (movie: Movie) => {
     setDetailLoading(true);
     setShowDetail(true);
-    setActiveStreamUrl('');
+    setStreamData(null);
     setActiveEmbedKey('');
+    setPlayerError('');
     try {
       const res = await fetch(`/api/movie-detail?slug=${encodeURIComponent(movie.slug)}`);
       const data = await res.json();
@@ -155,24 +186,129 @@ export default function DemoPage() {
     setDetailLoading(false);
   };
 
-  // Play video in iframe using our stream proxy
-  const playInIframe = async (embed: MovieDetail['embeds'][0]) => {
+  // Play video using HLS.js - extracts direct stream URL from our API
+  const playVideo = async (embed: MovieDetail['embeds'][0]) => {
     setPlayerLoading(true);
     setActiveEmbedKey(embed.key);
+    setPlayerError('');
+    setStreamData(null);
     
-    // Use our /api/stream proxy - this fetches the player page server-side
-    // and serves it from our own domain, bypassing sandbox restrictions
-    const streamUrl = `/api/stream?trembed=${embed.key}&trid=${embed.id}&trtype=1`;
-    setActiveStreamUrl(streamUrl);
-    
-    // Small delay to show loading state
-    setTimeout(() => setPlayerLoading(false), 1500);
+    try {
+      const res = await fetch(`/api/stream?trembed=${embed.key}&trid=${embed.id}&trtype=1`);
+      const data: StreamData = await res.json();
+      
+      if (data.success && data.streamUrl) {
+        setStreamData(data);
+        // HLS.js initialization will happen in useEffect when streamData changes
+      } else {
+        setPlayerError(data.error || 'Could not get video stream. The API may be down or the video format changed.');
+        setPlayerLoading(false);
+      }
+    } catch (err) {
+      setPlayerError('Network error - could not reach the stream API.');
+      setPlayerLoading(false);
+    }
   };
+
+  // Initialize HLS.js player when streamData changes
+  useEffect(() => {
+    if (!streamData?.streamUrl || !videoRef.current) return;
+    
+    const video = videoRef.current;
+    
+    // Destroy previous HLS instance
+    if (hlsRef.current) {
+      hlsRef.current.destroy();
+      hlsRef.current = null;
+    }
+    
+    const streamUrl = streamData.streamUrl;
+    
+    if (streamData.source === 'mp4' || streamUrl.endsWith('.mp4')) {
+      // Direct MP4 - no HLS needed
+      video.src = streamUrl;
+      video.play().then(() => {
+        setIsPlaying(true);
+        setPlayerLoading(false);
+      }).catch(() => {
+        setPlayerLoading(false);
+      });
+    } else if (Hls.isSupported()) {
+      // HLS.js supported - use it for m3u8 streams
+      const hls = new Hls({
+        maxBufferLength: 30,
+        maxMaxBufferLength: 60,
+        startLevel: -1, // Auto quality
+        capLevelToPlayerSize: true,
+      });
+      hlsRef.current = hls;
+      
+      hls.loadSource(streamUrl);
+      hls.attachMedia(video);
+      
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        video.play().then(() => {
+          setIsPlaying(true);
+          setPlayerLoading(false);
+        }).catch(() => {
+          setPlayerLoading(false);
+        });
+      });
+      
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (data.fatal) {
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              hls.startLoad();
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              hls.recoverMediaError();
+              break;
+            default:
+              setPlayerError('Fatal HLS error - cannot recover.');
+              hls.destroy();
+              setPlayerLoading(false);
+              break;
+          }
+        }
+      });
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      // Native HLS support (Safari)
+      video.src = streamUrl;
+      video.play().then(() => {
+        setIsPlaying(true);
+        setPlayerLoading(false);
+      }).catch(() => {
+        setPlayerLoading(false);
+      });
+    } else {
+      setPlayerError('Your browser does not support HLS video playback.');
+      setPlayerLoading(false);
+    }
+    
+    // Set poster if available
+    if (streamData.poster) {
+      video.poster = streamData.poster;
+    }
+  }, [streamData]);
 
   // Toggle fullscreen for player
   const toggleFullscreen = () => {
-    setIsFullscreen(!isFullscreen);
+    if (!playerContainerRef.current) return;
+    if (!document.fullscreenElement) {
+      playerContainerRef.current.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});
+    } else {
+      document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {});
+    }
   };
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
 
   // Initial fetch & Auto-refresh
   useEffect(() => {
@@ -204,30 +340,6 @@ export default function DemoPage() {
 
   return (
     <div className="min-h-screen bg-[#0a0a0f] text-white">
-      {/* Fullscreen Player Overlay */}
-      {isFullscreen && activeStreamUrl && (
-        <div className="fixed inset-0 z-[100] bg-black flex flex-col">
-          <div className="flex items-center justify-between px-4 py-2 bg-[#0a0a0f]">
-            <div className="flex items-center gap-2">
-              <Film className="w-4 h-4 text-red-500" />
-              <span className="text-sm text-gray-300">{selectedMovie?.title || 'Playing...'}</span>
-            </div>
-            <Button variant="ghost" size="sm" className="text-white hover:bg-red-600/50" onClick={() => setIsFullscreen(false)}>
-              <Minimize2 className="w-4 h-4 mr-1" /> Exit Fullscreen
-            </Button>
-          </div>
-          <div className="flex-1">
-            <iframe
-              src={activeStreamUrl}
-              className="w-full h-full border-0"
-              allowFullScreen
-              allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
-              referrerPolicy="no-referrer"
-            />
-          </div>
-        </div>
-      )}
-
       {/* Header */}
       <header className="sticky top-0 z-50 bg-[#0a0a0f]/95 backdrop-blur border-b border-red-900/30">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
@@ -239,7 +351,7 @@ export default function DemoPage() {
               <h1 className="text-xl font-bold bg-gradient-to-r from-red-500 to-orange-500 bg-clip-text text-transparent">
                 CineClone API Demo
               </h1>
-              <p className="text-[10px] text-red-400/80 -mt-0.5">desicinemas.pk data API with video proxy</p>
+              <p className="text-[10px] text-red-400/80 -mt-0.5">desicinemas.pk data API with video streaming</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -276,7 +388,7 @@ export default function DemoPage() {
                 </div>
                 <div>
                   <p className="text-green-400 font-semibold text-sm">API Active - desicinemas.pk</p>
-                  <p className="text-gray-500 text-xs">Last updated: {lastUpdated.toLocaleTimeString()}</p>
+                  <p className="text-gray-500 text-xs">Last updated: {lastUpdated || 'loading...'}</p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -304,7 +416,7 @@ export default function DemoPage() {
             </div>
             <div className="mt-3 bg-black/40 rounded-lg p-3">
               <p className="text-gray-500 text-xs font-mono">
-                GET /api/movies | /api/movie-detail?slug= | /api/stream?trembed=&trid=&trtype= | /api/search?q= | /api/latest
+                GET /api/movies | /api/movie-detail?slug= | /api/stream?trembed=&amp;trid=&amp;trtype= | /api/search?q= | /api/latest
               </p>
             </div>
           </div>
@@ -432,16 +544,21 @@ export default function DemoPage() {
                   </div>
 
                   <div className="p-6 space-y-6">
-                    {/* Video Player - IFRAME WITH PROXY */}
-                    {activeStreamUrl ? (
+                    {/* Video Player - HLS.js DIRECT STREAM */}
+                    {(streamData || playerLoading || playerError) ? (
                       <div className="bg-black rounded-xl overflow-hidden border border-green-800/40">
                         <div className="flex items-center justify-between px-4 py-2 bg-[#12121a] border-b border-green-800/30">
                           <div className="flex items-center gap-2">
                             <Monitor className="w-4 h-4 text-green-500" />
-                            <span className="text-green-400 text-sm font-semibold">Now Playing</span>
+                            <span className="text-green-400 text-sm font-semibold">
+                              {playerLoading ? 'Loading...' : isPlaying ? 'Now Playing' : 'Player Ready'}
+                            </span>
                             <span className="text-gray-400 text-xs">- {selectedMovie.title}</span>
                           </div>
                           <div className="flex items-center gap-2">
+                            {streamData && (
+                              <Badge className="bg-green-600 text-xs">{streamData.source?.toUpperCase()}</Badge>
+                            )}
                             <Button
                               variant="ghost"
                               size="sm"
@@ -454,31 +571,67 @@ export default function DemoPage() {
                               variant="ghost"
                               size="sm"
                               className="text-gray-400 hover:text-red-400 hover:bg-red-600/30"
-                              onClick={() => { setActiveStreamUrl(''); setActiveEmbedKey(''); }}
+                              onClick={() => { 
+                                setStreamData(null); 
+                                setActiveEmbedKey(''); 
+                                setPlayerError('');
+                                if (hlsRef.current) {
+                                  hlsRef.current.destroy();
+                                  hlsRef.current = null;
+                                }
+                              }}
                             >
                               <X className="w-4 h-4" />
                             </Button>
                           </div>
                         </div>
-                        <div className="relative aspect-video bg-black">
-                          {playerLoading ? (
-                            <div className="absolute inset-0 flex items-center justify-center">
+                        <div ref={playerContainerRef} className="relative aspect-video bg-black">
+                          {playerLoading && (
+                            <div className="absolute inset-0 flex items-center justify-center z-10 bg-black/60">
                               <div className="text-center">
                                 <Loader2 className="w-12 h-12 text-red-500 animate-spin mx-auto mb-3" />
-                                <p className="text-gray-400 text-sm">Loading player via proxy...</p>
-                                <p className="text-gray-600 text-xs mt-1">Bypassing sandbox restrictions</p>
+                                <p className="text-gray-300 text-sm">Extracting video stream...</p>
+                                <p className="text-gray-500 text-xs mt-1">Fetching m3u8 URL from rpmplay.xyz API</p>
                               </div>
                             </div>
-                          ) : null}
-                          <iframe
-                            src={activeStreamUrl}
-                            className="w-full h-full border-0"
-                            allowFullScreen
-                            allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
-                            referrerPolicy="no-referrer"
-                            onLoad={() => setPlayerLoading(false)}
+                          )}
+                          {playerError && (
+                            <div className="absolute inset-0 flex items-center justify-center z-10 bg-black/80">
+                              <div className="text-center max-w-sm mx-auto px-4">
+                                <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-3" />
+                                <p className="text-red-400 text-sm font-semibold mb-2">Playback Error</p>
+                                <p className="text-gray-400 text-xs">{playerError}</p>
+                                <Button 
+                                  size="sm" 
+                                  variant="outline"
+                                  className="mt-3 border-red-700 text-red-400"
+                                  onClick={() => setPlayerError('')}
+                                >
+                                  Dismiss
+                                </Button>
+                              </div>
+                            </div>
+                          )}
+                          <video
+                            ref={videoRef}
+                            className="w-full h-full"
+                            controls
+                            playsInline
+                            autoPlay
+                            onPlay={() => setIsPlaying(true)}
+                            onPause={() => setIsPlaying(false)}
+                            onWaiting={() => setPlayerLoading(true)}
+                            onCanPlay={() => setPlayerLoading(false)}
                           />
                         </div>
+                        {/* Stream info bar */}
+                        {streamData && (
+                          <div className="px-4 py-2 bg-[#0d0d14] border-t border-green-800/20">
+                            <p className="text-gray-600 text-xs font-mono truncate">
+                              Stream: {streamData.streamUrl?.substring(0, 80)}...
+                            </p>
+                          </div>
+                        )}
                       </div>
                     ) : null}
 
@@ -530,24 +683,24 @@ export default function DemoPage() {
                                   <Badge className="bg-red-600 text-xs">{embed.quality}</Badge>
                                 </div>
                                 <Button 
-                                  onClick={() => playInIframe(embed)} 
+                                  onClick={() => playVideo(embed)} 
                                   disabled={playerLoading && activeEmbedKey === embed.key}
                                   className="bg-red-600 hover:bg-red-700"
                                 >
                                   {playerLoading && activeEmbedKey === embed.key ? (
                                     <Loader2 className="w-4 h-4 mr-1 animate-spin" />
-                                  ) : activeStreamUrl && activeEmbedKey === embed.key ? (
+                                  ) : streamData && activeEmbedKey === embed.key ? (
                                     <Monitor className="w-4 h-4 mr-1" />
                                   ) : (
                                     <Play className="w-4 h-4 mr-1" />
                                   )}
-                                  {activeStreamUrl && activeEmbedKey === embed.key ? 'Playing' : 'Play in Player'}
+                                  {streamData && activeEmbedKey === embed.key ? 'Playing' : 'Play Video'}
                                 </Button>
                               </div>
                             </div>
                           ))}
                           <p className="text-green-400/60 text-xs mt-2">
-                            Video apne hosting pe iframe me play hoga - sandbox error nahi aayega kyunki /api/stream proxy use hota hai
+                            Direct m3u8 stream extraction - HLS.js player - No iframe/sandbox issues
                           </p>
                         </div>
                       ) : (
@@ -590,7 +743,7 @@ function SecurityPanel() {
             <h2 className="text-3xl font-bold text-red-400 mb-2">Aapki Website Safe NAHI Hai!</h2>
             <p className="text-red-200/80 text-lg mb-4">
               Koi bhi aapke API ka data use karke apni khud ki website/app bana sakta hai.
-              Ye demo website LIVE data fetch kar rahi hai desicinemas.pk se aur video proxy ke saath play bhi kar rahi hai.
+              Ye demo website LIVE data fetch kar rahi hai desicinemas.pk se aur direct stream extraction ke saath play bhi kar rahi hai.
             </p>
           </div>
         </div>
@@ -600,8 +753,8 @@ function SecurityPanel() {
         {[
           { severity: 'CRITICAL', title: 'WordPress REST API Fully Exposed', desc: '/wp-json/ publicly accessible - 100+ routes exposed', fix: 'Disable REST API plugin' },
           { severity: 'CRITICAL', title: 'Admin Username Leaked', desc: '/wp-json/wp/v2/users reveals "desicinema" username', fix: 'Block users endpoint' },
-          { severity: 'CRITICAL', title: 'Video Embed URLs Predictable', desc: 'Pattern: ?trembed=X&trid=Y&trtype=1 - anyone can embed via proxy', fix: 'Token-based auth + X-Frame-Options' },
-          { severity: 'CRITICAL', title: 'Video Player Can Be Proxied', desc: '/api/stream proxy bypasses sandbox - video plays in iframe anywhere', fix: 'Add referer checks + token auth' },
+          { severity: 'CRITICAL', title: 'Video Stream URLs Extractable', desc: 'm3u8 stream URLs can be extracted via API proxy - anyone can play videos', fix: 'Token-based auth + URL signing' },
+          { severity: 'CRITICAL', title: 'Video Player API Exposed', desc: 'rpmplay.xyz /api/v1/info and /api/v1/video return stream URLs', fix: 'Add referer checks + token auth' },
           { severity: 'HIGH', title: 'Movie Data Fully Scrapable', desc: 'All data in HTML - scraper can clone entire database', fix: 'JS rendering + anti-scraping' },
           { severity: 'HIGH', title: 'No CORS/X-Frame-Options', desc: 'Any website can iframe your content', fix: 'CSP + X-Frame-Options headers' },
         ].map((v, idx) => (
@@ -630,7 +783,7 @@ function SecurityPanel() {
               'Check Referer header on embed pages',
               'Implement rate limiting against scraping',
               'Block /wp-json/wp/v2/users endpoint',
-              'Load content via authenticated AJAX calls',
+              'Sign video stream URLs with expiring tokens',
             ].map((fix, idx) => (
               <div key={idx} className="bg-black/30 rounded-lg p-3 flex items-center gap-2">
                 <Shield className="w-4 h-4 text-green-500 shrink-0" />

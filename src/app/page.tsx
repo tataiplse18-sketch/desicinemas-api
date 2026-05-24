@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -10,8 +10,9 @@ import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { 
   Play, Search, Film, Star, Clock, Calendar, 
-  AlertTriangle, Shield, Eye, Globe, Server, X,
-  RefreshCw, Loader2, ExternalLink, ChevronRight
+  AlertTriangle, Shield, Eye, Globe, X,
+  RefreshCw, Loader2, ChevronRight, Monitor,
+  Maximize2, Minimize2
 } from 'lucide-react';
 
 interface Movie {
@@ -65,6 +66,12 @@ export default function DemoPage() {
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
   const [autoRefresh, setAutoRefresh] = useState(false);
 
+  // Video player state
+  const [activeStreamUrl, setActiveStreamUrl] = useState('');
+  const [activeEmbedKey, setActiveEmbedKey] = useState('');
+  const [playerLoading, setPlayerLoading] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
   // Fetch movies from our API
   const fetchMovies = useCallback(async (pageNum: number = 1) => {
     setLoading(true);
@@ -80,7 +87,6 @@ export default function DemoPage() {
         setLastUpdated(new Date());
       }
     } catch {
-      // Fallback sample data
       if (pageNum === 1) {
         setMovies([{
           title: 'Dhurandhar 2: The Revenge (HD)',
@@ -119,6 +125,8 @@ export default function DemoPage() {
   const loadMovieDetail = async (movie: Movie) => {
     setDetailLoading(true);
     setShowDetail(true);
+    setActiveStreamUrl('');
+    setActiveEmbedKey('');
     try {
       const res = await fetch(`/api/movie-detail?slug=${encodeURIComponent(movie.slug)}`);
       const data = await res.json();
@@ -147,6 +155,25 @@ export default function DemoPage() {
     setDetailLoading(false);
   };
 
+  // Play video in iframe using our stream proxy
+  const playInIframe = async (embed: MovieDetail['embeds'][0]) => {
+    setPlayerLoading(true);
+    setActiveEmbedKey(embed.key);
+    
+    // Use our /api/stream proxy - this fetches the player page server-side
+    // and serves it from our own domain, bypassing sandbox restrictions
+    const streamUrl = `/api/stream?trembed=${embed.key}&trid=${embed.id}&trtype=1`;
+    setActiveStreamUrl(streamUrl);
+    
+    // Small delay to show loading state
+    setTimeout(() => setPlayerLoading(false), 1500);
+  };
+
+  // Toggle fullscreen for player
+  const toggleFullscreen = () => {
+    setIsFullscreen(!isFullscreen);
+  };
+
   // Initial fetch & Auto-refresh
   useEffect(() => {
     const doFetch = async () => { await fetchMovies(1); };
@@ -158,7 +185,7 @@ export default function DemoPage() {
     const interval = setInterval(() => {
       const doFetch = async () => { await fetchMovies(1); };
       doFetch();
-    }, 60000); // Refresh every minute
+    }, 60000);
     return () => clearInterval(interval);
   }, [autoRefresh, fetchMovies]);
 
@@ -177,6 +204,30 @@ export default function DemoPage() {
 
   return (
     <div className="min-h-screen bg-[#0a0a0f] text-white">
+      {/* Fullscreen Player Overlay */}
+      {isFullscreen && activeStreamUrl && (
+        <div className="fixed inset-0 z-[100] bg-black flex flex-col">
+          <div className="flex items-center justify-between px-4 py-2 bg-[#0a0a0f]">
+            <div className="flex items-center gap-2">
+              <Film className="w-4 h-4 text-red-500" />
+              <span className="text-sm text-gray-300">{selectedMovie?.title || 'Playing...'}</span>
+            </div>
+            <Button variant="ghost" size="sm" className="text-white hover:bg-red-600/50" onClick={() => setIsFullscreen(false)}>
+              <Minimize2 className="w-4 h-4 mr-1" /> Exit Fullscreen
+            </Button>
+          </div>
+          <div className="flex-1">
+            <iframe
+              src={activeStreamUrl}
+              className="w-full h-full border-0"
+              allowFullScreen
+              allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+              referrerPolicy="no-referrer"
+            />
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="sticky top-0 z-50 bg-[#0a0a0f]/95 backdrop-blur border-b border-red-900/30">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
@@ -188,7 +239,7 @@ export default function DemoPage() {
               <h1 className="text-xl font-bold bg-gradient-to-r from-red-500 to-orange-500 bg-clip-text text-transparent">
                 CineClone API Demo
               </h1>
-              <p className="text-[10px] text-red-400/80 -mt-0.5">desicinemas.pk data API with video</p>
+              <p className="text-[10px] text-red-400/80 -mt-0.5">desicinemas.pk data API with video proxy</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -253,7 +304,7 @@ export default function DemoPage() {
             </div>
             <div className="mt-3 bg-black/40 rounded-lg p-3">
               <p className="text-gray-500 text-xs font-mono">
-                GET /api/movies?page=1 | /api/movie-detail?slug=&lt;slug&gt; | /api/video?videoId=&lt;id&gt; | /api/search?q=&lt;query&gt;
+                GET /api/movies | /api/movie-detail?slug= | /api/stream?trembed=&trid=&trtype= | /api/search?q= | /api/latest
               </p>
             </div>
           </div>
@@ -381,6 +432,56 @@ export default function DemoPage() {
                   </div>
 
                   <div className="p-6 space-y-6">
+                    {/* Video Player - IFRAME WITH PROXY */}
+                    {activeStreamUrl ? (
+                      <div className="bg-black rounded-xl overflow-hidden border border-green-800/40">
+                        <div className="flex items-center justify-between px-4 py-2 bg-[#12121a] border-b border-green-800/30">
+                          <div className="flex items-center gap-2">
+                            <Monitor className="w-4 h-4 text-green-500" />
+                            <span className="text-green-400 text-sm font-semibold">Now Playing</span>
+                            <span className="text-gray-400 text-xs">- {selectedMovie.title}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-gray-400 hover:text-white hover:bg-green-600/30"
+                              onClick={toggleFullscreen}
+                            >
+                              <Maximize2 className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-gray-400 hover:text-red-400 hover:bg-red-600/30"
+                              onClick={() => { setActiveStreamUrl(''); setActiveEmbedKey(''); }}
+                            >
+                              <X className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </div>
+                        <div className="relative aspect-video bg-black">
+                          {playerLoading ? (
+                            <div className="absolute inset-0 flex items-center justify-center">
+                              <div className="text-center">
+                                <Loader2 className="w-12 h-12 text-red-500 animate-spin mx-auto mb-3" />
+                                <p className="text-gray-400 text-sm">Loading player via proxy...</p>
+                                <p className="text-gray-600 text-xs mt-1">Bypassing sandbox restrictions</p>
+                              </div>
+                            </div>
+                          ) : null}
+                          <iframe
+                            src={activeStreamUrl}
+                            className="w-full h-full border-0"
+                            allowFullScreen
+                            allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+                            referrerPolicy="no-referrer"
+                            onLoad={() => setPlayerLoading(false)}
+                          />
+                        </div>
+                      </div>
+                    ) : null}
+
                     {/* Description */}
                     {selectedMovie.description && (
                       <p className="text-gray-300 leading-relaxed">{selectedMovie.description}</p>
@@ -418,10 +519,36 @@ export default function DemoPage() {
                       </h4>
                       
                       {selectedMovie.embeds.length > 0 ? (
-                        <div className="space-y-3">
+                        <div className="space-y-2">
                           {selectedMovie.embeds.map((embed) => (
-                            <VideoPlayerCard key={embed.key} embed={embed} movieTitle={selectedMovie.title} />
+                            <div key={embed.key} className="bg-black/40 rounded-lg p-3">
+                              <div className="flex items-center justify-between flex-wrap gap-2">
+                                <div className="flex items-center gap-3 flex-wrap">
+                                  <Badge variant="outline" className="border-green-700 text-green-400">{embed.label}</Badge>
+                                  <span className="text-gray-400 text-sm">{embed.language}</span>
+                                  <span className="text-gray-500 text-xs">{embed.server}</span>
+                                  <Badge className="bg-red-600 text-xs">{embed.quality}</Badge>
+                                </div>
+                                <Button 
+                                  onClick={() => playInIframe(embed)} 
+                                  disabled={playerLoading && activeEmbedKey === embed.key}
+                                  className="bg-red-600 hover:bg-red-700"
+                                >
+                                  {playerLoading && activeEmbedKey === embed.key ? (
+                                    <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                                  ) : activeStreamUrl && activeEmbedKey === embed.key ? (
+                                    <Monitor className="w-4 h-4 mr-1" />
+                                  ) : (
+                                    <Play className="w-4 h-4 mr-1" />
+                                  )}
+                                  {activeStreamUrl && activeEmbedKey === embed.key ? 'Playing' : 'Play in Player'}
+                                </Button>
+                              </div>
+                            </div>
                           ))}
+                          <p className="text-green-400/60 text-xs mt-2">
+                            Video apne hosting pe iframe me play hoga - sandbox error nahi aayega kyunki /api/stream proxy use hota hai
+                          </p>
                         </div>
                       ) : (
                         <div className="bg-black/40 rounded-lg p-4 text-center">
@@ -451,89 +578,6 @@ export default function DemoPage() {
   );
 }
 
-// Video Player Component - opens in new tab to avoid sandbox blocking
-function VideoPlayerCard({ embed, movieTitle }: { 
-  embed: { key: string; id: string; label: string; language: string; server: string; quality: string; embedUrl: string; playerUrl: string; videoId: string };
-  movieTitle: string;
-}) {
-  const [loading, setLoading] = useState(false);
-  const [resolvedUrl, setResolvedUrl] = useState('');
-
-  const handlePlay = async () => {
-    setLoading(true);
-    try {
-      // If we already have the player URL, open it directly
-      if (embed.playerUrl) {
-        window.open(embed.playerUrl, '_blank', 'noopener,noreferrer');
-        setResolvedUrl(embed.playerUrl);
-      } else if (embed.videoId) {
-        // Construct the player URL from video ID
-        const url = `https://movieshub.rpmplay.xyz/#${embed.videoId}`;
-        window.open(url, '_blank', 'noopener,noreferrer');
-        setResolvedUrl(url);
-      } else {
-        // Try to resolve via our API
-        const res = await fetch(`/api/video?videoId=${embed.id}`);
-        const data = await res.json();
-        if (data.success && data.embedUrl) {
-          window.open(data.embedUrl, '_blank', 'noopener,noreferrer');
-          setResolvedUrl(data.embedUrl);
-        } else {
-          // Last resort: open the desicinemas embed page
-          window.open(embed.embedUrl, '_blank', 'noopener,noreferrer');
-          setResolvedUrl(embed.embedUrl);
-        }
-      }
-    } catch {
-      window.open(embed.embedUrl, '_blank', 'noopener,noreferrer');
-      setResolvedUrl(embed.embedUrl);
-    }
-    setLoading(false);
-  };
-
-  return (
-    <div className="space-y-2">
-      <div className="bg-black/40 rounded-lg p-3 flex items-center justify-between">
-        <div className="flex items-center gap-3 flex-wrap">
-          <Badge variant="outline" className="border-green-700 text-green-400">{embed.label}</Badge>
-          <span className="text-gray-400 text-sm">{embed.language}</span>
-          <span className="text-gray-500 text-xs">• {embed.server}</span>
-          <Badge className="bg-red-600 text-xs">{embed.quality}</Badge>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button onClick={handlePlay} disabled={loading} className="bg-red-600 hover:bg-red-700">
-            {loading ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Play className="w-4 h-4 mr-1" />}
-            Play Movie
-          </Button>
-        </div>
-      </div>
-      
-      {/* Show resolved URL after play */}
-      {resolvedUrl && (
-        <div className="bg-green-950/30 border border-green-800/30 rounded-lg p-3">
-          <div className="flex items-center gap-2 mb-1">
-            <Badge className="bg-green-600 text-[10px]">VIDEO OPENED</Badge>
-            <span className="text-green-300 text-xs">{movieTitle}</span>
-          </div>
-          <p className="text-green-400/60 text-[10px] font-mono break-all">
-            Player URL: {resolvedUrl}
-          </p>
-          <p className="text-gray-500 text-[10px] mt-1">
-            Video player naye tab me khula hai. Sandbox restriction ki wajah se iframe me block hota hai.
-          </p>
-        </div>
-      )}
-      
-      {/* API Data Flow Proof */}
-      <div className="bg-black/30 rounded-lg p-2">
-        <p className="text-gray-600 text-[10px] font-mono">
-          Data flow: /api/movie-detail → embedUrl({embed.embedUrl.substring(0, 50)}...) → playerUrl({(embed.playerUrl || 'resolving...').substring(0, 40)}...)
-        </p>
-      </div>
-    </div>
-  );
-}
-
 function SecurityPanel() {
   return (
     <div className="max-w-7xl mx-auto px-4 py-8">
@@ -546,7 +590,7 @@ function SecurityPanel() {
             <h2 className="text-3xl font-bold text-red-400 mb-2">Aapki Website Safe NAHI Hai!</h2>
             <p className="text-red-200/80 text-lg mb-4">
               Koi bhi aapke API ka data use karke apni khud ki website/app bana sakta hai.
-              Ye demo website LIVE data fetch kar rahi hai desicinemas.pk se.
+              Ye demo website LIVE data fetch kar rahi hai desicinemas.pk se aur video proxy ke saath play bhi kar rahi hai.
             </p>
           </div>
         </div>
@@ -556,7 +600,8 @@ function SecurityPanel() {
         {[
           { severity: 'CRITICAL', title: 'WordPress REST API Fully Exposed', desc: '/wp-json/ publicly accessible - 100+ routes exposed', fix: 'Disable REST API plugin' },
           { severity: 'CRITICAL', title: 'Admin Username Leaked', desc: '/wp-json/wp/v2/users reveals "desicinema" username', fix: 'Block users endpoint' },
-          { severity: 'CRITICAL', title: 'Video Embed URLs Predictable', desc: 'Pattern: ?trembed=X&trid=Y&trtype=1 - anyone can embed', fix: 'Token-based auth + X-Frame-Options' },
+          { severity: 'CRITICAL', title: 'Video Embed URLs Predictable', desc: 'Pattern: ?trembed=X&trid=Y&trtype=1 - anyone can embed via proxy', fix: 'Token-based auth + X-Frame-Options' },
+          { severity: 'CRITICAL', title: 'Video Player Can Be Proxied', desc: '/api/stream proxy bypasses sandbox - video plays in iframe anywhere', fix: 'Add referer checks + token auth' },
           { severity: 'HIGH', title: 'Movie Data Fully Scrapable', desc: 'All data in HTML - scraper can clone entire database', fix: 'JS rendering + anti-scraping' },
           { severity: 'HIGH', title: 'No CORS/X-Frame-Options', desc: 'Any website can iframe your content', fix: 'CSP + X-Frame-Options headers' },
         ].map((v, idx) => (
@@ -581,7 +626,7 @@ function SecurityPanel() {
               'Disable WP REST API for unauthenticated users',
               'Add X-Frame-Options: SAMEORIGIN header',
               'Add Content-Security-Policy: frame-ancestors self',
-              'Use token-based video embed URLs',
+              'Use token-based video embed URLs (time-limited)',
               'Check Referer header on embed pages',
               'Implement rate limiting against scraping',
               'Block /wp-json/wp/v2/users endpoint',

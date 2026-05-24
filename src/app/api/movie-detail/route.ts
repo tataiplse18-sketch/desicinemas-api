@@ -1,120 +1,162 @@
 import { NextRequest, NextResponse } from 'next/server';
+import * as cheerio from 'cheerio';
+
+const BASE_URL = 'https://desicinemas.pk';
+
+interface EmbedInfo {
+  key: string;
+  id: string;
+  label: string;
+  language: string;
+  server: string;
+  quality: string;
+  embedUrl: string;
+  playerUrl: string;
+  videoId: string;
+}
+
+async function fetchPage(url: string): Promise<string> {
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.5',
+    },
+  });
+  return await res.text();
+}
+
+async function getPlayerUrl(embedUrl: string): Promise<{ playerUrl: string; videoId: string }> {
+  try {
+    // Fetch the embed page which contains an iframe to the actual player
+    const html = await fetchPage(embedUrl);
+    const $ = cheerio.load(html);
+    
+    // Find the iframe inside .Video div
+    const iframeSrc = $('.Video iframe').attr('src') || 
+                      $('iframe').attr('data-litespeed-src') || 
+                      $('iframe').attr('data-src') || '';
+    
+    if (iframeSrc) {
+      // Extract video ID from the hash
+      const hashMatch = iframeSrc.match(/#([a-zA-Z0-9]+)$/);
+      const videoId = hashMatch ? hashMatch[1] : '';
+      return { playerUrl: iframeSrc, videoId };
+    }
+    
+    return { playerUrl: '', videoId: '' };
+  } catch {
+    return { playerUrl: '', videoId: '' };
+  }
+}
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const slug = searchParams.get('slug');
-  
+
   if (!slug) {
     return NextResponse.json({ success: false, error: 'Slug is required' }, { status: 400 });
   }
 
   try {
-    const url = `https://desicinemas.pk/movies/${slug}/`;
-    
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'text/html,application/xhtml+xml',
-      },
+    const url = `${BASE_URL}/movies/${slug}/`;
+    const html = await fetchPage(url);
+    const $ = cheerio.load(html);
+
+    // Extract movie details
+    const title = $('h1.Title').first().text().trim();
+    const description = $('.Description > p').first().text().trim();
+    const quality = $('.Info .Qlty').first().text().trim();
+    const duration = $('.Info .Time').first().text().trim();
+    const year = $('.Info .Date').first().text().trim();
+
+    // Thumbnail
+    let thumbnail = '';
+    const bgImg = $('img.TPostBg').first();
+    const bgDataSrc = bgImg.attr('data-src') || bgImg.attr('data-litespeed-src') || '';
+    if (bgDataSrc && !bgDataSrc.includes('data:image')) {
+      thumbnail = bgDataSrc.startsWith('//') ? `https:${bgDataSrc}` : bgDataSrc;
+    }
+
+    // Genres
+    const genres: string[] = [];
+    $('p.Genre a').each((_, el) => {
+      genres.push($(el).text().trim());
     });
 
-    const html = await response.text();
-    
-    // Extract movie details
-    const title = extractBetween(html, /<h1\s+class="Title">([\s\S]*?)<\/h1>/i) || '';
-    const description = extractBetween(html, /class="Description"><p>([\s\S]*?)<\/p>/i) || '';
-    const quality = extractBetween(html, /class="Qlty">([\s\S]*?)<\/span>/i) || '';
-    const duration = extractBetween(html, /class="Time">([\s\S]*?)<\/span>/i) || '';
-    const year = extractBetween(html, /class="Date">([\s\S]*?)<\/span>/i) || '';
-    
-    // Extract genres
-    const genreRegex = /class="Genre">[\s\S]*?<\/span>([\s\S]*?)<\/p>/gi;
-    const genreMatch = genreRegex.exec(html);
-    let genres: string[] = [];
-    if (genreMatch) {
-      const genreLinks = genreMatch[1].match(/>([^<]+)<\/a>/g) || [];
-      genres = genreLinks.map((g: string) => g.replace(/<\/?a[^>]*>/g, '').replace(/>/g, ''));
-    }
-    
-    // Extract cast
-    const castRegex = /class="Cast[\s\S]*?<\/span>([\s\S]*?)<\/p>/gi;
-    const castMatch = castRegex.exec(html);
-    let cast: string[] = [];
-    if (castMatch) {
-      const castLinks = castMatch[1].match(/>([^<]+)<\/a>/g) || [];
-      cast = castLinks.map((c: string) => c.replace(/<\/?a[^>]*>/g, '').replace(/>/g, ''));
-    }
-    
-    // Extract directors
-    const directorRegex = /class="Director[\s\S]*?<\/span>([\s\S]*?)<\/p>/gi;
-    const directorMatch = directorRegex.exec(html);
-    let directors: string[] = [];
-    if (directorMatch) {
-      const dirLinks = directorMatch[1].match(/>([^<]+)<\/a>/g) || [];
-      directors = dirLinks.map((d: string) => d.replace(/<\/?a[^>]*>/g, '').replace(/>/g, ''));
-    }
-    
-    // Extract thumbnail/background image
-    const thumbMatch = html.match(/data-src="(\/\/image\.tmdb\.org\/[^"]+)"/i);
-    const thumbnail = thumbMatch ? `https:${thumbMatch[1]}` : '';
-    
-    // Extract video embed info
-    const embedRegex = /data-typ="movie"\s+data-key="(\d+)"\s+data-id="(\d+)"/gi;
-    let embeds: { key: string; id: string; label: string; server: string; quality: string; }[] = [];
-    let embedMatch;
-    while ((embedMatch = embedRegex.exec(html)) !== null) {
+    // Directors
+    const directors: string[] = [];
+    $('p.Director a, p.Director .tt-at').each((_, el) => {
+      const text = $(el).text().trim();
+      if (text) directors.push(text);
+    });
+
+    // Cast
+    const cast: string[] = [];
+    $('p.Cast a, .Cast-sh a').each((_, el) => {
+      const text = $(el).text().trim();
+      if (text) cast.push(text);
+    });
+
+    // Embed options - extract from ListOptions
+    const embeds: EmbedInfo[] = [];
+    $('ul.ListOptions li').each((_, el) => {
+      const $el = $(el);
+      const key = $el.attr('data-key') || '0';
+      const id = $el.attr('data-id') || '';
+      const language = $el.find('.AAIco-language').text().trim();
+      const server = $el.find('.AAIco-dns').text().trim();
+      const qualityLabel = $el.find('.AAIco-equalizer').text().trim();
+      const label = $el.find('.Optntl span').text().trim() || (parseInt(key) + 1).toString();
+      
+      const embedUrl = `${BASE_URL}/?trembed=${key}&trid=${id}&trtype=1`;
+      
       embeds.push({
-        key: embedMatch[1],
-        id: embedMatch[2],
-        label: `Option ${parseInt(embedMatch[1]) + 1}`,
-        server: '',
-        quality: ''
+        key,
+        id,
+        label: `Option ${label}`,
+        language: language || 'Hindi',
+        server: server || 'Server',
+        quality: qualityLabel || 'HD',
+        embedUrl,
+        playerUrl: '',
+        videoId: '',
       });
+    });
+
+    // Now fetch the player URL for the first embed
+    if (embeds.length > 0) {
+      const firstEmbed = embeds[0];
+      const { playerUrl, videoId } = await getPlayerUrl(firstEmbed.embedUrl);
+      firstEmbed.playerUrl = playerUrl;
+      firstEmbed.videoId = videoId;
     }
-    
-    // Also try to extract embed server info
-    const optionRegex = /data-key="(\d+)"\s+data-id="(\d+)"[\s\S]*?class="AAIco-language">([\s\S]*?)<\/p>[\s\S]*?class="AAIco-dns">([\s\S]*?)<\/p>[\s\S]*?class="AAIco-equalizer">([\s\S]*?)<\/p>/gi;
-    embeds = [];
-    while ((embedMatch = optionRegex.exec(html)) !== null) {
-      embeds.push({
-        key: embedMatch[1],
-        id: embedMatch[2],
-        label: `Option ${parseInt(embedMatch[1]) + 1}`,
-        server: embedMatch[3].trim(),
-        quality: embedMatch[4].trim()
-      });
-    }
-    
-    // Extract likes
-    const likesMatch = html.match(/class="vot_cl">(\d+)/);
-    const dislikesMatch = html.match(/class="vot_cu">(\d+)/);
-    
+
+    // Likes
+    const likes = parseInt($('.vot_cl').first().text()) || 0;
+    const dislikes = parseInt($('.vot_cu').first().text()) || 0;
+
     return NextResponse.json({
       success: true,
       movie: {
-        title: title.replace(/<[^>]*>/g, '').trim(),
+        title,
         slug,
         url,
-        description: description.replace(/<[^>]*>/g, '').trim(),
+        description,
         year,
         quality,
         duration,
-        genres,
-        cast,
-        directors,
         thumbnail,
+        genres,
+        directors,
+        cast,
         embeds,
-        likes: likesMatch ? parseInt(likesMatch[1]) : 0,
-        dislikes: dislikesMatch ? parseInt(dislikesMatch[1]) : 0
-      }
+        likes,
+        dislikes,
+      },
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return NextResponse.json({ success: false, error: message }, { status: 500 });
   }
-}
-
-function extractBetween(html: string, regex: RegExp): string | null {
-  const match = regex.exec(html);
-  return match ? match[1] : null;
 }
